@@ -1,0 +1,173 @@
+name: tinnie-e2e
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app-pw
+      POSTGRES_DB: app
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "app"]
+      interval: 2s
+      retries: 30
+
+  storage:
+    image: chrislusf/seaweedfs:4.47
+    command: server -dir=/data -ip=storage -ip.bind=0.0.0.0 -s3 -s3.port=9000
+    environment:
+      AWS_ACCESS_KEY_ID: key
+      AWS_SECRET_ACCESS_KEY: secret
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9000/healthz"]
+      interval: 2s
+      retries: 30
+
+  bucket:
+    image: chrislusf/seaweedfs:4.47
+    depends_on:
+      storage:
+        condition: service_healthy
+    entrypoint: ["sh", "-c", "echo 's3.bucket.create -name assets' | weed shell -master=storage:9333"]
+    restart: "no"
+
+  mariadb:
+    image: mariadb:10.6
+    environment:
+      MARIADB_ROOT_PASSWORD: root-pw
+      MARIADB_DATABASE: shop
+      MARIADB_USER: shop
+      MARIADB_PASSWORD: shop-pw
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 2s
+      retries: 30
+
+  mysql:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: root-pw
+      MYSQL_DATABASE: shop8
+      MYSQL_USER: shop8
+      MYSQL_PASSWORD: shop8-pw
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot-pw"]
+      interval: 2s
+      retries: 60
+
+  # Seeds the site volume the way a PHP app leaves it: owned by www-data (uid 33), with a cache folder.
+  seed:
+    image: alpine:3.22
+    volumes:
+      - site:/site
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        mkdir -p /site/sub /site/cache
+        echo hello > /site/index.php
+        echo nested > /site/sub/page.txt
+        echo old > /site/cache/old.txt
+        ln -s sub/page.txt /site/link
+        chown -R 33:33 /site
+    restart: "no"
+
+  # Stopped by tinnie around backups and restores.
+  app:
+    image: alpine:3.22
+    command: sleep infinity
+    init: true
+
+  # Runs the command source.
+  tool:
+    image: alpine:3.22
+    command: sleep infinity
+    init: true
+
+  webhook:
+    image: mendhak/http-https-echo:37
+    environment:
+      HTTP_PORT: 8080
+
+  tinnie:
+    build:
+      context: ../..
+    depends_on:
+      postgres:
+        condition: service_healthy
+      storage:
+        condition: service_healthy
+      mariadb:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+      app:
+        condition: service_started
+      tool:
+        condition: service_started
+    configs:
+      - source: tinnie
+        target: /config/tinnie.yml
+    volumes:
+      - backups:/backups
+      - site:/sources/site
+      - /var/run/docker.sock:/var/run/docker.sock
+
+configs:
+  tinnie:
+    content: |
+      name: e2e
+      schedule: "0 3 1 1 *"
+      timezone: Australia/Sydney
+      repository:
+        url: /backups/restic
+        password: e2e-password
+        keep:
+          within: 24h
+          daily: 7
+      stop: [app]
+      notify:
+        urls: generic://webhook:8080/notify?disabletls=yes&template=json
+        level: info
+      sources:
+        - name: db
+          type: postgres
+          host: postgres
+          database: app
+          user: app
+          password: app-pw
+        - name: files
+          type: s3
+          endpoint: http://storage:9000
+          bucket: assets
+          access_key: key
+          secret_key: secret
+          path_style: true
+        - name: shop
+          type: mysql
+          host: mariadb
+          database: shop
+          user: shop
+          password: shop-pw
+        - name: shop8
+          type: mysql
+          host: mysql
+          database: shop8
+          user: shop8
+          password: shop8-pw
+        - name: site
+          type: volume
+          path: /sources/site
+          exclude:
+            - cache
+        - name: tool
+          type: command
+          service: tool
+          backup: cat /etc/hostname; echo payload
+          restore: cat > /tmp/restored
+
+volumes:
+  backups:
+  site:
