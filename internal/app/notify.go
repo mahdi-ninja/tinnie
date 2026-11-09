@@ -6,14 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nicholas-fedor/shoutrrr/pkg/router"
-	"github.com/nicholas-fedor/shoutrrr/pkg/types"
-
 	"tinnie/internal/config"
-	"tinnie/internal/proc"
+	notifypkg "tinnie/internal/notify"
 )
-
-const notifyTimeout = 15 * time.Second
 
 // result is the outcome of one backup run, as told to notifications.
 type result struct {
@@ -47,31 +42,6 @@ func (r result) body() string {
 }
 
 // notify sends the result to every notify URL: failures always, successes only with level info.
-// Each URL gets its own 15 second budget; a failed notification is logged and never fails the backup.
 func notify(ctx context.Context, n config.Notify, r result) {
-	if len(n.URLs) == 0 || (r.Err == nil && n.Level != config.NotifyInfo) {
-		return
-	}
-	sender, err := router.NewWithOptions(nil, types.SenderOptions{Timeout: notifyTimeout}, n.URLs...)
-	if err != nil {
-		proc.Logf("notify: %v", err)
-		return
-	}
-	defer sender.Close()
-	ctx, cancel := context.WithTimeout(ctx, notifyTimeout)
-	defer cancel()
-	params := types.Params{}
-	params.SetTitle(r.title())
-	for i, err := range sender.SendContext(ctx, r.body(), &params) {
-		if err != nil {
-			proc.Logf("notify: notify.urls[%d] (%s): %v", i, scheme(n.URLs[i]), err)
-		}
-	}
-}
-
-func scheme(u string) string {
-	if i := strings.Index(u, ":"); i > 0 {
-		return u[:i]
-	}
-	return "?"
+	notifypkg.Send(ctx, n, r.Err != nil, r.title(), r.body())
 }

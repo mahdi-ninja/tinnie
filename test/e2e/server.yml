@@ -1,0 +1,74 @@
+name: tinnie-e2e-server
+
+services:
+  server:
+    build:
+      context: ../..
+      target: server
+    configs:
+      - source: server
+        target: /config/tinnie-server.yml
+    volumes:
+      - repos:/data
+
+  webhook:
+    image: mendhak/http-https-echo:37
+    environment:
+      HTTP_PORT: 8080
+
+  seed:
+    image: alpine:3.22
+    volumes:
+      - site:/site
+    entrypoint: ["/bin/sh", "-c", "echo hello > /site/index.html"]
+    restart: "no"
+
+  # A tinnie stack backing up to the server, as a Komodo or Portainer stack would.
+  client:
+    build:
+      context: ../..
+    depends_on:
+      server:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    configs:
+      - source: client
+        target: /config/tinnie.yml
+    volumes:
+      - site:/sources/site
+
+configs:
+  server:
+    content: |
+      url: http://server:8000
+      timezone: Australia/Sydney
+      max_size: 1G
+      retention:
+        schedule: "0 3 1 1 *"
+        keep: { last: 1 }
+      notify:
+        urls: generic://webhook:8080/notify?disabletls=yes&template=json
+        level: info
+      stacks:
+        - name: mysite
+          password: mysite-rest
+          backup_password: mysite-backup
+        - name: other
+          password: other-rest
+
+  client:
+    content: |
+      name: mysite
+      schedule: "0 3 1 1 *"
+      repository:
+        url: rest:http://mysite:mysite-rest@server:8000/mysite
+        password: mysite-backup
+      sources:
+        - name: site
+          type: volume
+          path: /sources/site
+
+volumes:
+  repos:
+  site:

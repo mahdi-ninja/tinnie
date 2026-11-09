@@ -40,6 +40,18 @@ restic's `sftp:` backend, at `sftp:user@host:/path`. restic runs `ssh` as root i
 
 Make `known_hosts` with `ssh-keyscan backup.example.com > known_hosts` and keep every key it prints; with only some of them, ssh tries to add the rest to the read-only file and logs an error. ssh refuses a private key that others can read, so `chmod 600` it. For another port, use `sftp://backup@backup.example.com:2222//srv/restic/mysite`.
 
+## tinnie-server
+
+restic's `rest:` backend, on a host of your own, with append-only access and a private repository per stack. See [tinnie-server](server.md):
+
+```yaml
+      repository:
+        url: rest:https://mysite:${REST_PASSWORD}@backups.example.com/mysite
+        password: ${BACKUP_PASSWORD}
+```
+
+Leave out `keep`: the server runs retention, and a stack is not allowed to delete snapshots.
+
 ## Everything else
 
-restic's [repository docs](https://restic.readthedocs.io/en/stable/030_preparing_a_new_repo.html) cover the rest: REST server, Azure, Google Cloud Storage, any rclone remote and more. Put the variables a backend needs under `repository.env`.
+restic's [repository docs](https://restic.readthedocs.io/en/stable/030_preparing_a_new_repo.html) cover the rest: any other REST server, Azure, Google Cloud Storage, any rclone remote and more. Put the variables a backend needs under `repository.env`.

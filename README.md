@@ -190,6 +190,16 @@ restic gets only the variables under `repository.env` (plus `PATH`, `HOME`, `TZ`
 
 tinnie creates the repository on the first backup. Backblaze B2 and SFTP are in [docs/repository.md](docs/repository.md), and restic's [repository docs](https://restic.readthedocs.io/en/stable/030_preparing_a_new_repo.html) cover every other backend.
 
+### Your own backup server
+
+[tinnie-server](docs/server.md) is a companion image for a host of your own: restic's rest-server in append-only mode, with a private repository per stack and the retention run on the server. A stack can add snapshots and restore from them, but cannot delete them, so a compromised stack cannot destroy its own backups. Each stack points at its user there, with no `keep` block:
+
+```yaml
+      repository:
+        url: rest:https://mysite:${REST_PASSWORD}@backups.example.com/mysite
+        password: ${BACKUP_PASSWORD}
+```
+
 ## Config
 
 The config is YAML, written inline in the stack. The full reference is in [docs/config.md](docs/config.md).
@@ -216,9 +226,10 @@ Source types:
 
 ```sh
 go test ./...
-test/e2e/run.sh    # builds the image and runs a full stack in Docker
+test/e2e/run.sh       # builds the image and runs a full stack in Docker
+test/e2e/server.sh    # builds tinnie-server and a stack that backs up to it
 ```
 
 More in [docs/development.md](docs/development.md).
 
-Docs: [Config](docs/config.md) · [Repositories](docs/repository.md) · [Stopping services and Docker access](docs/docker.md) · [Notifications](docs/notifications.md) · [Private networks](docs/network.md) · [Development](docs/development.md)
+Docs: [Config](docs/config.md) · [Repositories](docs/repository.md) · [tinnie-server](docs/server.md) · [Stopping services and Docker access](docs/docker.md) · [Notifications](docs/notifications.md) · [Private networks](docs/network.md) · [Development](docs/development.md)

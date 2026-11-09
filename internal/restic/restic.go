@@ -19,12 +19,22 @@ import (
 
 const exitRepositoryMissing = 10
 
+// Repo is a restic repository. Host, when set, tags backups and filters every other command to that host;
+// tinnie-server leaves it empty to see every host's snapshots.
 type Repo struct {
 	URL      string
 	Password string
 	Env      map[string]string
 	Host     string
 	CacheDir string
+}
+
+// host returns the --host filter, or nothing when Host is empty.
+func (r Repo) host() []string {
+	if r.Host == "" {
+		return nil
+	}
+	return []string{"--host", r.Host}
 }
 
 type Snapshot struct {
@@ -111,7 +121,7 @@ func (r Repo) Backup(ctx context.Context, paths, excludes []string) (Summary, er
 }
 
 func (r Repo) Forget(ctx context.Context, keep config.Keep) error {
-	args := []string{"forget", "--host", r.Host, "--prune"}
+	args := append([]string{"forget"}, append(r.host(), "--prune")...)
 	add := func(flag string, n int) {
 		if n > 0 {
 			args = append(args, flag, strconv.Itoa(n))
@@ -130,11 +140,11 @@ func (r Repo) Forget(ctx context.Context, keep config.Keep) error {
 }
 
 func (r Repo) PrintSnapshots(ctx context.Context) error {
-	return proc.Run(ctx, r.env(), "restic", "snapshots", "--host", r.Host)
+	return proc.Run(ctx, r.env(), "restic", append([]string{"snapshots"}, r.host()...)...)
 }
 
 func (r Repo) Latest(ctx context.Context) (*Snapshot, error) {
-	cmd := r.cmd(ctx, "snapshots", "--json", "--latest", "1", "--host", r.Host)
+	cmd := r.cmd(ctx, append([]string{"snapshots", "--json", "--latest", "1"}, r.host()...)...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -166,7 +176,7 @@ type Node struct {
 // Lookup resolves snapshot (an ID or "latest") and returns its full ID along with the entries found at paths.
 // Paths missing from the snapshot are simply absent from the map.
 func (r Repo) Lookup(ctx context.Context, snapshot string, paths []string) (string, map[string]Node, error) {
-	args := append([]string{"ls", "--json", "--host", r.Host, snapshot, "--"}, paths...)
+	args := append(append(append([]string{"ls", "--json"}, r.host()...), snapshot, "--"), paths...)
 	cmd := r.cmd(ctx, args...)
 	var stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = nil, &stderr
@@ -222,7 +232,7 @@ func (r Repo) Lookup(ctx context.Context, snapshot string, paths []string) (stri
 // are deleted. Paths matching excludes (relative to dir) are left alone. The folder's own owner and mode are
 // set from the snapshot too, since restic only restores what is inside it.
 func (r Repo) RestoreInPlace(ctx context.Context, snapshot string, dir Node, excludes []string) error {
-	args := []string{"restore", snapshot + ":" + dir.Path, "--host", r.Host, "--target", dir.Path, "--delete"}
+	args := append(append([]string{"restore", snapshot + ":" + dir.Path}, r.host()...), "--target", dir.Path, "--delete")
 	for _, ex := range excludes {
 		args = append(args, "--exclude", "/"+ex)
 	}
@@ -236,9 +246,21 @@ func (r Repo) RestoreInPlace(ctx context.Context, snapshot string, dir Node, exc
 }
 
 func (r Repo) Restore(ctx context.Context, snapshot, target string, includes []string) error {
-	args := []string{"restore", snapshot, "--host", r.Host, "--target", target}
+	args := append(append([]string{"restore", snapshot}, r.host()...), "--target", target)
 	for _, inc := range includes {
 		args = append(args, "--include", inc)
 	}
 	return proc.Run(ctx, r.env(), "restic", args...)
+}
+
+// Check opens the repository without changing anything, so a wrong password or a missing repository fails.
+func (r Repo) Check(ctx context.Context) error {
+	return proc.RunQuiet(ctx, r.env(), "restic", "cat", "config")
+}
+
+// Exec runs restic with the given arguments against the repository, attached to the terminal.
+func (r Repo) Exec(ctx context.Context, args []string) error {
+	cmd := r.cmd(ctx, args...)
+	cmd.Stdin = os.Stdin
+	return cmd.Run()
 }
