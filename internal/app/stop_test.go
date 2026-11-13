@@ -13,6 +13,7 @@ import (
 
 	"tinnie/internal/config"
 	"tinnie/internal/docker"
+	"tinnie/internal/source"
 )
 
 // fakeDocker keeps container states in memory. tinnie itself is the container "self" of service "backup".
@@ -209,6 +210,67 @@ sources:
 	}
 	if _, _, err := a.restoreTargets([]string{"db"}); err != nil {
 		t.Errorf("restore db = %v", err)
+	}
+	if got := a.describe(skipped[0]); got != "service gitea (no restore)" {
+		t.Errorf("describe gitea = %q", got)
+	}
+	if got := a.skipReason(skipped[0]); got != "it has no restore command" {
+		t.Errorf("skip reason for gitea = %q", got)
+	}
+}
+
+func TestRestoreTargetsFollowRestorePolicy(t *testing.T) {
+	cfg, err := config.Parse([]byte(`
+schedule: "@daily"
+repository: {url: /r, password: p}
+sources:
+  - {name: db, type: mysql, host: h, database: d, user: u}
+  - {name: certs, type: volume, path: /sources/certs, restore_policy: manual}
+  - {name: assets, type: s3, bucket: b, access_key: k, secret_key: s, restore_policy: never}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(cfg, Paths{Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := func(list []source.Source) string {
+		var out []string
+		for _, s := range list {
+			out = append(out, s.Name())
+		}
+		return strings.Join(out, ",")
+	}
+	targets, skipped, err := a.restoreTargets(nil)
+	if err != nil || names(targets) != "db" || names(skipped) != "certs,assets" {
+		t.Errorf("restore all = %s, %s, %v", names(targets), names(skipped), err)
+	}
+	if got := a.skipReason(skipped[0]); !strings.Contains(got, "restore_policy is manual") {
+		t.Errorf("skip reason for certs = %q", got)
+	}
+	if got := a.skipReason(skipped[1]); !strings.Contains(got, "restore_policy is never") {
+		t.Errorf("skip reason for assets = %q", got)
+	}
+	targets, skipped, err = a.restoreTargets([]string{"certs", "db"})
+	if err != nil || names(targets) != "certs,db" || len(skipped) != 0 {
+		t.Errorf("restore certs db = %s, %s, %v", names(targets), names(skipped), err)
+	}
+	if _, _, err := a.restoreTargets([]string{"assets"}); err == nil || !strings.Contains(err.Error(), "assets: restore_policy is never") {
+		t.Errorf("restore assets = %v", err)
+	}
+	for i, want := range []string{"", " (manual restore)", " (no restore)"} {
+		s := a.Sources[i]
+		if got := a.describe(s); got != s.Describe()+want {
+			t.Errorf("describe %s = %q", s.Name(), got)
+		}
+	}
+
+	for i := range cfg.Sources {
+		cfg.Sources[i].RestorePolicy = config.RestoreManual
+	}
+	if _, _, err := a.restoreTargets(nil); err == nil || !strings.Contains(err.Error(), "nothing to restore") {
+		t.Errorf("restore all with only manual sources = %v", err)
 	}
 }
 

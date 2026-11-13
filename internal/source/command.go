@@ -43,9 +43,6 @@ func (c *command) Type() string     { return "command" }
 func (c *command) Restorable() bool { return c.cfg.Restore != "" }
 
 func (c *command) Describe() string {
-	if c.cfg.Restore == "" {
-		return "service " + c.cfg.Service + " (no restore)"
-	}
 	return "service " + c.cfg.Service
 }
 

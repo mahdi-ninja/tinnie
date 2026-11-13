@@ -191,7 +191,7 @@ func (a *App) backup(ctx context.Context) (_ string, err error) {
 	paths := []string{stage}
 	var excludes []string
 	for _, s := range a.Sources {
-		proc.Logf("backing up %s (%s %s)", s.Name(), s.Type(), s.Describe())
+		proc.Logf("backing up %s (%s %s)", s.Name(), s.Type(), a.describe(s))
 		if d, ok := s.(source.Direct); ok {
 			if err := s.Backup(ctx, ""); err != nil {
 				return "", fmt.Errorf("%s: %w", s.Name(), err)
@@ -438,7 +438,7 @@ func (a *App) Check(ctx context.Context) error {
 		}
 	}
 	for _, s := range a.Sources {
-		report(fmt.Sprintf("%s (%s %s)", s.Name(), s.Type(), s.Describe()), s.Check(ctx))
+		report(fmt.Sprintf("%s (%s %s)", s.Name(), s.Type(), a.describe(s)), s.Check(ctx))
 	}
 	report("repository "+restic.Redact(a.Cfg.Repository.URL), a.Repo.Ensure(ctx))
 	if len(failed) > 0 {
@@ -463,10 +463,10 @@ func (a *App) Restore(ctx context.Context, opts RestoreOptions) (err error) {
 	}
 	fmt.Printf("This replaces the following with snapshot %s:\n", opts.Snapshot)
 	for _, s := range targets {
-		fmt.Printf("  %-12s %s %s\n", s.Name(), s.Type(), s.Describe())
+		fmt.Printf("  %-12s %s %s\n", s.Name(), s.Type(), a.describe(s))
 	}
 	for _, s := range skipped {
-		fmt.Printf("Skipping %s: it has no restore command.\n", s.Name())
+		fmt.Printf("Skipping %s: %s.\n", s.Name(), a.skipReason(s))
 	}
 	if stop := a.Cfg.Stop.Restore; len(stop) > 0 {
 		them := "it"
@@ -524,7 +524,7 @@ func (a *App) Restore(ctx context.Context, opts RestoreOptions) (err error) {
 	}
 	proc.Logf("restoring snapshot %s", shortID(snapshot))
 	for _, s := range skipped {
-		proc.Logf("skipping %s: %v", s.Name(), source.ErrNoRestore)
+		proc.Logf("skipping %s: %s", s.Name(), a.skipReason(s))
 	}
 
 	if len(staged) > 0 {
@@ -542,7 +542,7 @@ func (a *App) Restore(ctx context.Context, opts RestoreOptions) (err error) {
 		}
 	}
 	for i, s := range targets {
-		proc.Logf("replacing %s (%s %s)", s.Name(), s.Type(), s.Describe())
+		proc.Logf("replacing %s (%s %s)", s.Name(), s.Type(), a.describe(s))
 		var err error
 		if d, ok := s.(source.Direct); ok {
 			err = a.Repo.RestoreInPlace(ctx, snapshot, nodes[paths[i]], d.Excludes())
@@ -557,27 +557,67 @@ func (a *App) Restore(ctx context.Context, opts RestoreOptions) (err error) {
 	return nil
 }
 
-// restoreTargets picks the sources to restore. Restoring everything skips sources that cannot be restored
-// (a command source without a restore command); naming such a source is an error.
+// restoreTargets picks the sources to restore by their restore_policy. Restoring everything takes the auto
+// sources and skips the rest; a manual source is restored when it is named, and naming a source that is
+// never restored is an error.
 func (a *App) restoreTargets(names []string) (targets, skipped []source.Source, err error) {
 	picked, err := a.pick(names)
 	if err != nil {
 		return nil, nil, err
 	}
+	named := len(names) > 0
 	for _, s := range picked {
+		policy := a.restorePolicy(s)
 		switch {
-		case source.Restorable(s):
+		case policy == config.RestoreAuto, policy == config.RestoreManual && named:
 			targets = append(targets, s)
-		case len(names) > 0:
+		case !named:
+			skipped = append(skipped, s)
+		case !source.Restorable(s):
 			return nil, nil, fmt.Errorf("%s: %w; add restore: to the source to restore it", s.Name(), source.ErrNoRestore)
 		default:
-			skipped = append(skipped, s)
+			return nil, nil, fmt.Errorf("%s: restore_policy is never, so tinnie does not restore it; its data is in the snapshot to restore by hand", s.Name())
 		}
 	}
 	if len(targets) == 0 {
-		return nil, nil, errors.New("none of the sources can be restored: add restore: to the command sources")
+		return nil, nil, errors.New("nothing to restore: no source has restore_policy auto; name a manual source to restore it")
 	}
 	return targets, skipped, nil
+}
+
+// restorePolicy is the source's restore_policy. A source that has no way to restore is never restored.
+func (a *App) restorePolicy(s source.Source) string {
+	if !source.Restorable(s) {
+		return config.RestoreNever
+	}
+	for _, c := range a.Cfg.Sources {
+		if c.Name == s.Name() && c.RestorePolicy != "" {
+			return c.RestorePolicy
+		}
+	}
+	return config.RestoreAuto
+}
+
+// skipReason says why a restore of everything leaves s out.
+func (a *App) skipReason(s source.Source) string {
+	switch {
+	case !source.Restorable(s):
+		return "it has no restore command"
+	case a.restorePolicy(s) == config.RestoreManual:
+		return "its restore_policy is manual, so it is only restored when named"
+	}
+	return "its restore_policy is never"
+}
+
+// describe is the source's description, marked when a restore of everything leaves it out.
+func (a *App) describe(s source.Source) string {
+	switch a.restorePolicy(s) {
+	case config.RestoreManual:
+		return s.Describe() + " (manual restore)"
+	case config.RestoreNever:
+		return s.Describe() + " (no restore)"
+	}
+	return s.Describe()
 }
 
 // stageDir is where a staged source's files sit, both on disk and inside snapshots.

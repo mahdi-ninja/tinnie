@@ -24,7 +24,7 @@ The services are started again even when the backup or restore fails or is inter
 
 tinnie never stops its own container: a service under `stop` that turns out to be tinnie is skipped with a log line, and `tinnie check` reports it as a failure.
 
-A `type: command` source needs its service running, so tinnie refuses a config that lists that service under `stop.backup`, or under `stop.restore` when the source has a `restore` command. Likewise a `postgres` or `mysql` source whose `host` is a service under `stop.backup` or `stop.restore` is refused, since the database would be down when tinnie connects. That is why the Quick start stops `wordpress` and not `db`.
+A `type: command` source needs its service running, so tinnie refuses a config that lists that service under `stop.backup`, or under `stop.restore` when the source has a `restore` command. Likewise a `postgres` or `mysql` source whose `host` is a service under `stop.backup` or `stop.restore` is refused, since the database would be down when tinnie connects. A source with [`restore_policy: never`](config.md#restore-policy) is not restored, so its service or host may be under `stop.restore`. That is why the Quick start stops `wordpress` and not `db`.
 
 This needs [Docker access](#docker-access) and only works in Compose stacks. Portainer stacks on a standalone Docker environment are Compose stacks; Swarm stacks are not supported.
 

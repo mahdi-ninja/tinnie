@@ -128,7 +128,7 @@ Open a console on the container (`/bin/sh` or `/bin/bash`; in Portainer: Contain
 |---|---|
 | `tinnie snapshots` | List snapshots |
 | `tinnie backup` | Back up every source now |
-| `tinnie restore [snapshot [source...]]` | Replace sources with a snapshot. Defaults to `latest` and every source. Asks you to type `restore`; add `--yes` (or `-y`) to skip that in scripts |
+| `tinnie restore [snapshot [source...]]` | Replace sources with a snapshot. Defaults to `latest` and every source, except those a [restore policy](docs/config.md#restore-policy) leaves out. Asks you to type `restore`; add `--yes` (or `-y`) to skip that in scripts |
 | `tinnie check` | Validate the config and test every connection |
 | `tinnie help` | Show the summary and commands |
 
@@ -149,6 +149,8 @@ This replaces the following with snapshot latest:
 Everything added since that snapshot is deleted. tinnie stops wordpress while it restores and starts it again afterwards.
 Type restore to continue:
 ```
+
+A source with [`restore_policy: manual`](docs/config.md#restore-policy) is left out unless you name it, and one with `never` is always left out; the list above then ends with a line such as `Skipping certs: its restore_policy is manual, so it is only restored when named.`
 
 `tinnie check` connects to every source and the repository without changing anything (notification URLs are checked when the config is read). When the config has `stop` or a `type: command` source, it also checks that it can reach Docker and that each service under `stop` has a container:
 
@@ -221,6 +223,8 @@ Source types:
 - [`s3`](docs/config.md#type-s3): an S3 bucket or a prefix in it, with `rclone`
 - [`volume`](docs/config.md#type-volume): a Docker volume mounted into tinnie, read in place
 - [`command`](docs/config.md#type-command): the output of a command run in another service
+
+Any source can set [`restore_policy`](docs/config.md#restore-policy) to `manual` (restored only when named) or `never` (backed up, not restored).
 
 ## Development
 

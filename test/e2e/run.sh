@@ -10,6 +10,7 @@ s3() { dc run --rm -T --no-deps --entrypoint rclone -e RCLONE_CONFIG=/dev/null -
 put() { printf '%s' "$2" | s3 rcat "s:assets/$1"; }
 files() { s3 lsf -R s:assets | sort | tr '\n' ' '; }
 site() { dc exec -T tinnie sh -c "cd /sources/site && $1"; }
+cert() { dc exec -T tinnie cat /sources/certs/cert.pem; }
 running() { [ "$(dc ps -q --status running "$1")" != "" ]; }
 fail() { echo "FAIL: $*"; dc logs tinnie | tail -40; exit 1; }
 expect() { [ "$1" = "$2" ] || fail "$3: got '$1', want '$2'"; echo "ok: $3"; }
@@ -38,7 +39,7 @@ echo "ok: backup stops and starts app"
 
 dc exec -T tinnie tinnie health >/dev/null || fail "not healthy after backup"
 echo "ok: healthy"
-expect "$(dc exec -T tinnie tinnie check | grep -c "✓")" 9 "check passes docker, stop, every source and the repository"
+expect "$(dc exec -T tinnie tinnie check | grep -c "✓")" 11 "check passes docker, stop, every source and the repository"
 dc logs webhook | grep -qE '"title": *"tinnie e2e: backup [0-9a-f]+ saved"' || fail "success notification not received"
 echo "ok: success notification"
 
@@ -49,6 +50,7 @@ s3 deletefile s:assets/one.txt
 put three.txt "third"
 site "echo changed > index.php && chown 0:0 sub/page.txt && rm link && echo new > new.txt && echo after > cache/after.txt"
 dc exec -T tool rm -f /tmp/restored
+dc exec -T tinnie sh -c "echo renewed > /sources/certs/cert.pem"
 
 out=$(dc exec -T tinnie tinnie restore latest --yes 2>&1) || { echo "$out"; fail "restore failed"; }
 expect "$(sql 'SELECT count(*) FROM items')" 3 "restore brings back the rows"
@@ -71,6 +73,22 @@ echo "$out" | grep -q "stopping app" || fail "app was not stopped for the restor
 echo "$out" | grep -q "starting app" || fail "app was not started after the restore"
 running app || fail "app is not running after the restore"
 echo "ok: restore stops and starts app"
+
+expect "$(cert)" renewed "restore of everything leaves a manual source alone"
+echo "$out" | grep -q "Skipping certs: its restore_policy is manual" || fail "restore did not say it skips the manual source"
+echo "$out" | grep -q "Skipping audit: its restore_policy is never" || fail "restore did not say it skips the never source"
+dc exec -T tool test ! -e /tmp/audit-restored || fail "restore ran the restore command of a never source"
+echo "ok: restore of everything skips manual and never sources"
+dc exec -T tinnie tinnie restore latest certs --yes >/dev/null || fail "restore of a named manual source failed"
+expect "$(cert)" issued "a manual source is restored when named"
+out=$(dc exec -T tinnie tinnie restore latest audit --yes 2>&1) && fail "restore of a never source was accepted"
+echo "$out" | grep -q "audit: restore_policy is never" || fail "restore of a never source failed with: $out"
+dc exec -T tool test ! -e /tmp/audit-restored || fail "naming a never source ran its restore command"
+echo "ok: a never source is refused when named"
+summary=$(dc exec -T tinnie tinnie help)
+echo "$summary" | grep -q "certs .*(manual restore)" || fail "summary does not mark the manual source"
+echo "$summary" | grep -q "audit .*(no restore)" || fail "summary does not mark the never source"
+echo "ok: summary marks manual and never sources"
 
 sql "INSERT INTO items VALUES (5);"
 put four.txt "fourth"

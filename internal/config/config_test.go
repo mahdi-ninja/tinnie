@@ -135,13 +135,14 @@ func TestSources(t *testing.T) {
 		name    string
 		sources string
 		want    string // error substring; empty means valid
-		check   func(t *testing.T, s Source)
+		check   func(t *testing.T, cfg *Config)
 	}{
 		{
 			name: "mysql defaults",
 			sources: `
   - {name: db, type: mysql, host: db, database: app, user: app, password: pw}`,
-			check: func(t *testing.T, s Source) {
+			check: func(t *testing.T, cfg *Config) {
+				s := cfg.Sources[0]
 				if s.Mysql == nil || s.Mysql.Port != 3306 || s.Mysql.Password != "pw" {
 					t.Errorf("mysql = %+v", s.Mysql)
 				}
@@ -160,7 +161,8 @@ func TestSources(t *testing.T) {
     type: volume
     path: /sources/wordpress/
     exclude: [wp-content/cache/, "**/*.log"]`,
-			check: func(t *testing.T, s Source) {
+			check: func(t *testing.T, cfg *Config) {
+				s := cfg.Sources[0]
 				v := s.Volume
 				if v == nil || v.Path != "/sources/wordpress" || strings.Join(v.Exclude, ",") != "wp-content/cache,**/*.log" {
 					t.Errorf("volume = %+v", v)
@@ -189,7 +191,8 @@ func TestSources(t *testing.T) {
 			name: "command",
 			sources: `
   - {name: gitea, type: command, service: gitea, user: git, backup: gitea dump -f /dev/stdout}`,
-			check: func(t *testing.T, s Source) {
+			check: func(t *testing.T, cfg *Config) {
+				s := cfg.Sources[0]
 				c := s.Command
 				if c == nil || c.Service != "gitea" || c.User != "git" || c.Restore != "" {
 					t.Errorf("command = %+v", c)
@@ -200,6 +203,40 @@ func TestSources(t *testing.T) {
   - {name: gitea, type: command}`, want: "service is required (the Compose service to run the command in)\n  sources[0] (gitea): backup is required"},
 		{name: "command bad service", sources: `
   - {name: gitea, type: command, service: "git tea", backup: x}`, want: `service "git tea" is not a valid Compose service name`},
+		{
+			name: "restore_policy defaults",
+			sources: `
+  - {name: db, type: mysql, host: db, database: app, user: app}
+  - {name: gitea, type: command, service: gitea, backup: x}
+  - {name: wiki, type: command, service: wiki, backup: x, restore: y}`,
+			check: func(t *testing.T, cfg *Config) {
+				if got := policies(cfg); got != "auto never auto" {
+					t.Errorf("policies = %q", got)
+				}
+			},
+		},
+		{
+			name: "restore_policy on every type",
+			sources: `
+  - {name: pg, type: postgres, host: pg, database: d, user: u, restore_policy: manual}
+  - {name: db, type: mysql, host: db, database: d, user: u, restore_policy: never}
+  - {name: assets, type: s3, bucket: b, access_key: k, secret_key: s, restore_policy: never}
+  - {name: files, type: volume, path: /sources/files, restore_policy: manual}
+  - {name: gitea, type: command, service: gitea, backup: x, restore: y, restore_policy: auto}
+  - {name: wiki, type: command, service: wiki, backup: x, restore: y, restore_policy: never}
+  - {name: blog, type: command, service: blog, backup: x, restore_policy: never}`,
+			check: func(t *testing.T, cfg *Config) {
+				if got := policies(cfg); got != "manual never never manual auto never never" {
+					t.Errorf("policies = %q", got)
+				}
+			},
+		},
+		{name: "restore_policy unknown value", sources: `
+  - {name: db, type: mysql, host: db, database: d, user: u, restore_policy: sometimes}`, want: `sources[0] (db): restore_policy "sometimes" must be auto, manual or never`},
+		{name: "restore_policy manual without a restore command", sources: `
+  - {name: gitea, type: command, service: gitea, backup: x, restore_policy: manual}`, want: `restore_policy "manual" needs a restore command`},
+		{name: "restore_policy auto without a restore command", sources: `
+  - {name: gitea, type: command, service: gitea, backup: x, restore_policy: auto}`, want: `restore_policy "auto" needs a restore command`},
 		{name: "missing type", sources: `
   - {name: x}`, want: "type is required (postgres, mysql, s3, volume or command)"},
 		{name: "bad type", sources: `
@@ -218,10 +255,18 @@ func TestSources(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tt.check != nil {
-				tt.check(t, cfg.Sources[0])
+				tt.check(t, cfg)
 			}
 		})
 	}
+}
+
+func policies(cfg *Config) string {
+	var out []string
+	for _, s := range cfg.Sources {
+		out = append(out, s.RestorePolicy)
+	}
+	return strings.Join(out, " ")
 }
 
 func TestStopAndNotify(t *testing.T) {
@@ -322,5 +367,26 @@ func TestStopAndNotify(t *testing.T) {
 	cfg, err := Parse([]byte(base + "sources: [{name: g, type: command, service: gitea, backup: x}]\n"))
 	if err != nil || !cfg.NeedsDocker() {
 		t.Errorf("command source should need docker: %v", err)
+	}
+}
+
+func TestNeverRestoredSourcesMayBeStoppedForRestore(t *testing.T) {
+	parse := func(policy string) error {
+		_, err := Parse([]byte(base + "stop: {restore: [db, gitea]}\nsources:\n" +
+			"  - {name: db, type: mysql, host: db, database: d, user: u, restore_policy: " + policy + "}\n" +
+			"  - {name: gitea, type: command, service: gitea, backup: x, restore: y, restore_policy: " + policy + "}\n"))
+		return err
+	}
+	if err := parse("never"); err != nil {
+		t.Errorf("never: %v", err)
+	}
+	err := parse("manual")
+	for _, want := range []string{
+		`sources[0] (db): host "db" is also in stop.restore`,
+		`sources[1] (gitea): service "gitea" is also in stop.restore`,
+	} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("manual: error = %v, want %q", err, want)
+		}
 	}
 }

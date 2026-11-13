@@ -34,10 +34,6 @@ func TestCommandDescribe(t *testing.T) {
 	if got := c.Describe(); got != "service gitea" {
 		t.Errorf("Describe = %q", got)
 	}
-	c.cfg.Restore = ""
-	if got := c.Describe(); got != "service gitea (no restore)" {
-		t.Errorf("Describe without restore = %q", got)
-	}
 }
 
 func TestCommandErrorsHideTheCommand(t *testing.T) {

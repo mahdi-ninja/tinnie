@@ -20,6 +20,28 @@ Examples use the WordPress stack from the [Quick start](../README.md#quick-start
 
 Unknown keys are refused, so a typo fails at start instead of being ignored.
 
+## Restore policy
+
+Every source is backed up on every run. `restore_policy`, a key any source can have, sets when `tinnie restore` replaces it:
+
+| `restore_policy` | `tinnie restore` | `tinnie restore latest <source>` |
+|---|---|---|
+| `auto` (default) | restored | restored |
+| `manual` | skipped | restored |
+| `never` | skipped | refused |
+
+Use `manual` for a source you only want replaced on purpose, such as certificates, and `never` for one that is backed up as a safety copy and must not be overwritten, such as a bucket another system owns.
+
+```yaml
+      sources:
+        - name: certs
+          type: volume
+          path: /sources/certs
+          restore_policy: manual
+```
+
+A skipped source is listed before the restore asks you to confirm, and the console summary, logs and `tinnie check` mark it with `(manual restore)` or `(no restore)`. Its data is in every snapshot either way; for a `never` source, get it out with restic by hand.
+
 ## `type: postgres`
 
 Backed up with `pg_dump`, restored with `pg_restore`.
@@ -160,13 +182,13 @@ For a Gitea service in the same stack:
 
 Both commands run with `/bin/sh -c` inside the service's running container, as `docker exec` would, so pipes and redirects work and the container needs a shell. A command that exits with an error fails the backup or restore, and the last lines it printed to stderr are in the error. The service must have exactly one running container.
 
-The commands themselves are never shown, since a command may hold a password: the console summary, logs and `tinnie check` show the source as `service gitea` (with `(no restore)` when it has no `restore`), and errors say "the backup command" or "the restore command".
+The commands themselves are never shown, since a command may hold a password: the console summary, logs and `tinnie check` show the source as `service gitea`, and errors say "the backup command" or "the restore command".
 
 If tinnie is stopped or interrupted while a command runs (Ctrl+C, a closed console, a redeploy), the command keeps running in its container until it finishes on its own: Docker has no way to stop an exec. An interrupted restore command may then have read only part of the saved output, so run the restore again.
 
-Without `restore`, `tinnie restore` skips this source and restores the others; `tinnie restore latest gitea` fails instead. Either way, the saved output is in the snapshot to restore by hand.
+Without `restore`, the source's [restore policy](#restore-policy) is `never`: `tinnie restore` skips it and restores the others, and `tinnie restore latest gitea` fails. The saved output is in the snapshot to restore by hand. Setting `restore_policy` to `auto` or `manual` without a `restore` command is refused.
 
-The service cannot be under `stop.backup`, nor under `stop.restore` if the source has a `restore` command (see [Stopping services](docker.md#stopping-services)). This needs [Docker access](docker.md#docker-access).
+The service cannot be under `stop.backup`, nor under `stop.restore` unless the source is never restored (see [Stopping services](docker.md#stopping-services)). This needs [Docker access](docker.md#docker-access).
 
 ## Schedule
 

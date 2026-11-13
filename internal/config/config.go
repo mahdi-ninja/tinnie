@@ -84,14 +84,24 @@ func (c *Config) NeedsDocker() bool {
 }
 
 type Source struct {
-	Name     string
-	Type     string
-	Postgres *Postgres
-	S3       *S3
-	Mysql    *Mysql
-	Volume   *Volume
-	Command  *Command
+	Name string
+	Type string
+	// RestorePolicy is RestoreAuto, RestoreManual or RestoreNever.
+	RestorePolicy string
+	Postgres      *Postgres
+	S3            *S3
+	Mysql         *Mysql
+	Volume        *Volume
+	Command       *Command
 }
+
+// Restore policies say when tinnie restore replaces a source: with every restore (auto), only when the
+// source is named (manual), or not at all (never).
+const (
+	RestoreAuto   = "auto"
+	RestoreManual = "manual"
+	RestoreNever  = "never"
+)
 
 // SourceTypes lists every supported source type, for messages.
 const SourceTypes = "postgres, mysql, s3, volume or command"
@@ -99,6 +109,7 @@ const SourceTypes = "postgres, mysql, s3, volume or command"
 type Postgres struct {
 	Name     string `yaml:"name"`
 	Type     string `yaml:"type"`
+	Policy   string `yaml:"restore_policy"`
 	Host     string `yaml:"host"`
 	Port     int    `yaml:"port"`
 	Database string `yaml:"database"`
@@ -110,6 +121,7 @@ type Postgres struct {
 type S3 struct {
 	Name      string `yaml:"name"`
 	Type      string `yaml:"type"`
+	Policy    string `yaml:"restore_policy"`
 	Endpoint  string `yaml:"endpoint"`
 	Region    string `yaml:"region"`
 	Bucket    string `yaml:"bucket"`
@@ -123,6 +135,7 @@ type S3 struct {
 type Mysql struct {
 	Name     string `yaml:"name"`
 	Type     string `yaml:"type"`
+	Policy   string `yaml:"restore_policy"`
 	Host     string `yaml:"host"`
 	Port     int    `yaml:"port"`
 	Database string `yaml:"database"`
@@ -135,6 +148,7 @@ type Mysql struct {
 type Volume struct {
 	Name    string   `yaml:"name"`
 	Type    string   `yaml:"type"`
+	Policy  string   `yaml:"restore_policy"`
 	Path    string   `yaml:"path"`
 	Exclude []string `yaml:"exclude"`
 }
@@ -144,6 +158,7 @@ type Volume struct {
 type Command struct {
 	Name    string `yaml:"name"`
 	Type    string `yaml:"type"`
+	Policy  string `yaml:"restore_policy"`
 	Service string `yaml:"service"`
 	User    string `yaml:"user"`
 	Backup  string `yaml:"backup"`
@@ -269,13 +284,14 @@ func Parse(data []byte) (*Config, error) {
 
 func parseSource(node *yaml.Node) (Source, []string) {
 	var head struct {
-		Name string `yaml:"name"`
-		Type string `yaml:"type"`
+		Name   string `yaml:"name"`
+		Type   string `yaml:"type"`
+		Policy string `yaml:"restore_policy"`
 	}
 	if err := node.Decode(&head); err != nil {
 		return Source{}, []string{err.Error()}
 	}
-	src := Source{Name: head.Name, Type: head.Type}
+	src := Source{Name: head.Name, Type: head.Type, RestorePolicy: head.Policy}
 	var errs []string
 	if head.Name == "" {
 		errs = append(errs, "name is required")
@@ -376,6 +392,22 @@ func parseSource(node *yaml.Node) (Source, []string) {
 		errs = append(errs, "type is required ("+SourceTypes+")")
 	default:
 		errs = append(errs, fmt.Sprintf("type %q is not supported (%s)", head.Type, SourceTypes))
+	}
+	// A command source without a restore command has nothing to run, so it can only be never.
+	noRestore := src.Command != nil && src.Command.Restore == ""
+	switch src.RestorePolicy {
+	case "":
+		src.RestorePolicy = RestoreAuto
+		if noRestore {
+			src.RestorePolicy = RestoreNever
+		}
+	case RestoreAuto, RestoreManual:
+		if noRestore {
+			errs = append(errs, fmt.Sprintf("restore_policy %q needs a restore command; add restore: or use never", src.RestorePolicy))
+		}
+	case RestoreNever:
+	default:
+		errs = append(errs, fmt.Sprintf("restore_policy %q must be auto, manual or never", src.RestorePolicy))
 	}
 	return src, errs
 }
@@ -503,7 +535,8 @@ func checkVolumeOverlap(sources []Source, add func(string, ...any)) {
 }
 
 // checkStopConflicts rejects a command source whose service is stopped while its command would have to run in
-// it, and a database source whose host is a service stopped while it is dumped or restored.
+// it, and a database source whose host is a service stopped while it is dumped or restored. A source that is
+// never restored cannot conflict with stop.restore.
 func checkStopConflicts(sources []Source, st Stop, add func(string, ...any)) {
 	in := func(list []string, s string) bool {
 		for _, x := range list {
@@ -524,7 +557,8 @@ func checkStopConflicts(sources []Source, st Stop, add func(string, ...any)) {
 		if host != "" && in(st.Backup, host) {
 			add("sources[%d] (%s): host %q is also in stop.backup, so the dump could not connect", i, s.Name, host)
 		}
-		if host != "" && in(st.Restore, host) {
+		restored := s.RestorePolicy != RestoreNever
+		if host != "" && restored && in(st.Restore, host) {
 			add("sources[%d] (%s): host %q is also in stop.restore, so the restore could not connect", i, s.Name, host)
 		}
 		c := s.Command
@@ -534,7 +568,7 @@ func checkStopConflicts(sources []Source, st Stop, add func(string, ...any)) {
 		if in(st.Backup, c.Service) {
 			add("sources[%d] (%s): service %q is also in stop.backup, so its backup command could not run", i, s.Name, c.Service)
 		}
-		if c.Restore != "" && in(st.Restore, c.Service) {
+		if c.Restore != "" && restored && in(st.Restore, c.Service) {
 			add("sources[%d] (%s): service %q is also in stop.restore, so its restore command could not run", i, s.Name, c.Service)
 		}
 	}

@@ -55,11 +55,13 @@ services:
       interval: 2s
       retries: 60
 
-  # Seeds the site volume the way a PHP app leaves it: owned by www-data (uid 33), with a cache folder.
+  # Seeds the site volume the way a PHP app leaves it: owned by www-data (uid 33), with a cache folder,
+  # and the certs volume, which is only restored when named.
   seed:
     image: alpine:3.22
     volumes:
       - site:/site
+      - certs:/certs
     entrypoint:
       - /bin/sh
       - -c
@@ -70,6 +72,7 @@ services:
         echo old > /site/cache/old.txt
         ln -s sub/page.txt /site/link
         chown -R 33:33 /site
+        echo issued > /certs/cert.pem
     restart: "no"
 
   # Stopped by tinnie around backups and restores.
@@ -78,7 +81,7 @@ services:
     command: sleep infinity
     init: true
 
-  # Runs the command source.
+  # Runs the command sources.
   tool:
     image: alpine:3.22
     command: sleep infinity
@@ -113,6 +116,7 @@ services:
     volumes:
       - backups:/backups
       - site:/sources/site
+      - certs:/sources/certs
       - /var/run/docker.sock:/var/run/docker.sock
 
 configs:
@@ -167,7 +171,18 @@ configs:
           service: tool
           backup: cat /etc/hostname; echo payload
           restore: cat > /tmp/restored
+        - name: certs
+          type: volume
+          path: /sources/certs
+          restore_policy: manual
+        - name: audit
+          type: command
+          service: tool
+          backup: echo audit
+          restore: cat > /tmp/audit-restored
+          restore_policy: never
 
 volumes:
   backups:
   site:
+  certs:

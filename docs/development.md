@@ -9,7 +9,7 @@ test/e2e/run.sh                                   # builds the image and runs a 
 test/e2e/server.sh                                # builds tinnie-server and a stack that backs up to it
 ```
 
-The end-to-end suite ([test/e2e/compose.yml](../test/e2e/compose.yml)) backs up and restores Postgres 16, MariaDB 10.6, MySQL 8, a SeaweedFS bucket, a volume (owners, a symlink and an excluded folder) and a command source in one stack, with a service under `stop` and notifications to a webhook, and checks that each restore matches the snapshot exactly.
+The end-to-end suite ([test/e2e/compose.yml](../test/e2e/compose.yml)) backs up and restores Postgres 16, MariaDB 10.6, MySQL 8, a SeaweedFS bucket, a volume (owners, a symlink and an excluded folder) and a command source in one stack, with a service under `stop` and notifications to a webhook, and checks that each restore matches the snapshot exactly. A second volume with `restore_policy: manual` and a command source with `restore_policy: never` check that a restore of everything skips both, that the manual one is restored when named, and that the never one is refused.
 
 The server suite ([test/e2e/server.yml](../test/e2e/server.yml)) starts tinnie-server and a tinnie stack that backs up to it, and checks authentication, that clients cannot delete snapshots, server-side retention and its notification, the console, and a restore from the client.
 
